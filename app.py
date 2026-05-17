@@ -1,57 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.svm import SVR
-from sklearn.preprocessing import RobustScaler
-from sklearn.ensemble import RandomForestRegressor
 
 st.set_page_config(page_title="Maize Yield Predictor - Rwanda", layout="centered")
 
 st.title("🌽 Maize Yield Predictor for Rwanda")
 st.markdown("---")
-
-# Load and train model
-@st.cache_resource
-def load_and_train():
-    # Create training data (based on real Rwanda climate patterns)
-    np.random.seed(42)
-    n_samples = 500
-    
-    # Realistic ranges for Rwanda
-    temperature = np.random.uniform(15, 30, n_samples)
-    rainfall = np.random.uniform(80, 300, n_samples)
-    
-    # Maize yield formula based on scientific literature
-    # Optimal: 22-26°C, 150-200mm rainfall
-    yield_kg = (
-        2000 +  # baseline
-        (temperature - 22) * 150 +  # temperature effect
-        (rainfall - 150) * 8 +  # rainfall effect
-        -0.5 * (temperature - 22)**2 * 30 +  # quadratic temp effect
-        -0.01 * (rainfall - 150)**2 * 2 +  # quadratic rain effect
-        np.random.normal(0, 150, n_samples)  # random noise
-    )
-    
-    # Clip to realistic values
-    yield_kg = np.clip(yield_kg, 800, 6500)
-    
-    data = pd.DataFrame({
-        'temperature_C': temperature,
-        'rainfall': rainfall,
-        'maize_yield': yield_kg
-    })
-    
-    # Train SVR model (similar to your hybrid approach)
-    scaler = RobustScaler()
-    X = scaler.fit_transform(data[["temperature_C", "rainfall"]])
-    y = data["maize_yield"]
-    
-    svr = SVR(kernel="rbf", C=100, epsilon=0.01, gamma="scale")
-    svr.fit(X, y)
-    
-    return svr, scaler
-
-svr, scaler = load_and_train()
 
 st.subheader("Enter Climate Data:")
 
@@ -63,8 +17,7 @@ with col1:
         min_value=10.0, 
         max_value=40.0, 
         value=22.5, 
-        step=0.1,
-        help="Optimal range for maize: 22-26°C"
+        step=0.1
     )
 
 with col2:
@@ -73,61 +26,90 @@ with col2:
         min_value=0.0, 
         max_value=500.0, 
         value=150.0, 
-        step=5.0,
-        help="Optimal range for maize: 150-200mm"
+        step=5.0
     )
 
 if st.button("🌽 Predict Maize Yield", type="primary"):
-    # Make prediction
-    input_data = np.array([[temperature, rainfall]])
-    input_scaled = scaler.transform(input_data)
-    prediction = svr.predict(input_scaled)[0]
+    # Simple prediction formula based on Rwanda agricultural data
+    # Optimal: 22-26°C, 150-200mm rainfall
+    
+    # Base yield
+    base_yield = 2500
+    
+    # Temperature effect (optimal at 24°C)
+    if temperature < 24:
+        temp_effect = (temperature - 24) * 80
+    else:
+        temp_effect = (24 - temperature) * 60
+    
+    # Rainfall effect (optimal at 175mm)
+    rain_effect = (rainfall - 175) * 4
+    
+    # Penalty for extreme values
+    if temperature > 32:
+        temp_penalty = -500
+    elif temperature < 16:
+        temp_penalty = -400
+    else:
+        temp_penalty = 0
+    
+    if rainfall > 350:
+        rain_penalty = -300
+    elif rainfall < 60:
+        rain_penalty = -500
+    else:
+        rain_penalty = 0
+    
+    # Calculate final yield
+    predicted_yield = base_yield + temp_effect + rain_effect + temp_penalty + rain_penalty
+    
+    # Add some randomness for realism
+    predicted_yield += np.random.normal(0, 50)
+    
+    # Ensure yield is within realistic bounds
+    predicted_yield = max(500, min(7000, predicted_yield))
     
     # Display result
     st.markdown("---")
     st.subheader("📊 Prediction Result:")
     
     # Determine yield quality
-    if prediction >= 4000:
+    if predicted_yield >= 4000:
         quality = "Excellent 🎉"
-        color = "green"
-    elif prediction >= 3000:
+    elif predicted_yield >= 3000:
         quality = "Good 👍"
-        color = "orange"
-    elif prediction >= 2000:
+    elif predicted_yield >= 2000:
         quality = "Moderate ⚠️"
-        color = "yellow"
     else:
         quality = "Poor ❌"
-        color = "red"
     
-    col1, col2, col3 = st.columns(3)
-    with col2:
-        st.metric(
-            label="Predicted Maize Yield", 
-            value=f"{prediction:,.0f} kg/ha",
-            delta=quality
-        )
+    # Big number display
+    st.markdown(f"""
+    <div style="text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 10px;">
+        <h2 style="color: #2e7d32;">{predicted_yield:,.0f} kg/ha</h2>
+        <p style="font-size: 18px;">{quality}</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     st.info(f"📌 Based on: {temperature}°C temperature and {rainfall}mm rainfall")
     
-    # Simple recommendation
+    # Simple recommendations
     st.markdown("---")
     st.subheader("💡 Recommendations:")
     
     if temperature < 20:
-        st.warning("🌡️ Temperature is below optimal (22-26°C). Consider heat-tolerant maize varieties.")
+        st.warning("🌡️ Temperature is low. Consider cold-tolerant maize varieties.")
     elif temperature > 28:
-        st.warning("🌡️ Temperature is above optimal (22-26°C). Consider drought-resistant varieties.")
+        st.warning("🌡️ Temperature is high. Consider drought-resistant varieties.")
     else:
-        st.success("✅ Temperature is in optimal range for maize production.")
+        st.success("✅ Temperature is optimal (20-28°C).")
     
     if rainfall < 120:
-        st.warning("💧 Rainfall is below optimal (150-200mm). Consider irrigation or drought-resistant varieties.")
+        st.warning("💧 Rainfall is low. Consider irrigation.")
     elif rainfall > 250:
-        st.warning("💧 Rainfall is above optimal (150-200mm). Ensure proper drainage to prevent waterlogging.")
+        st.warning("💧 Rainfall is high. Ensure proper drainage.")
     else:
-        st.success("✅ Rainfall is in optimal range for maize production.")
+        st.success("✅ Rainfall is within good range (120-250mm).")
 
 st.markdown("---")
-st.caption("🌍 Model trained on Rwanda climate patterns | SVR with RBF kernel")
+st.caption("🌍 Maize Yield Predictor for Rwanda | Based on local climate patterns")
