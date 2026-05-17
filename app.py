@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
+import pickle
+import statsmodels.api as sm
 
 st.set_page_config(page_title="Maize Yield Predictor - Rwanda", layout="centered")
 
@@ -9,20 +10,23 @@ st.title("🌽 Maize Yield Predictor for Rwanda")
 st.markdown("Hybrid Model: ARIMAX(1,2,1) + SVR")
 st.markdown("---")
 
-# Load pre-trained models
+# Load pre-trained models using pickle
 @st.cache_resource
 def load_models():
-    arimax_model = joblib.load('arimax_model.pkl')
-    svr_model = joblib.load('svr_model.pkl')
-    scaler = joblib.load('scaler.pkl')
+    with open('arimax_model.pkl', 'rb') as f:
+        arimax_model = pickle.load(f)
+    with open('svr_model.pkl', 'rb') as f:
+        svr_model = pickle.load(f)
+    with open('scaler.pkl', 'rb') as f:
+        scaler = pickle.load(f)
     return arimax_model, svr_model, scaler
 
 try:
     arimax_model, svr_model, scaler = load_models()
     models_loaded = True
-except:
+except Exception as e:
     models_loaded = False
-    st.error("Models not found. Please upload the model files first.")
+    st.error(f"Models not found. Please upload the model files first. Error: {e}")
 
 if models_loaded:
     st.subheader("Enter Climate Data:")
@@ -37,7 +41,6 @@ if models_loaded:
     
     if st.button("🌽 Predict Maize Yield", type="primary"):
         # Prepare input
-        import statsmodels.api as sm
         input_data = np.array([[temperature, rainfall]])
         input_scaled = scaler.transform(input_data)
         input_with_const = sm.add_constant(input_scaled)
@@ -48,7 +51,7 @@ if models_loaded:
         # SVR prediction
         svr_pred = svr_model.predict(input_scaled)[0]
         
-        # Hybrid prediction (YOUR EXACT METHOD)
+        # Hybrid prediction
         hybrid_pred = arimax_pred + svr_pred
         
         # Display
@@ -59,7 +62,7 @@ if models_loaded:
         with col2:
             st.metric("🌽 Predicted Yield", f"{hybrid_pred:,.0f} kg/ha")
         
-        st.info(f"📌 ARIMAX: {arimax_pred:,.0f} + SVR correction: {svr_pred:,.0f} = {hybrid_pred:,.0f} kg/ha")
+        st.info(f"📌 ARIMAX: {arimax_pred:,.0f} + SVR: {svr_pred:,.0f} = {hybrid_pred:,.0f} kg/ha")
 
 st.markdown("---")
 st.caption("HYBRID MODEL: ARIMAX(1,2,1) + SVR | Trained on Rwanda data")
