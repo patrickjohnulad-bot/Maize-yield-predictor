@@ -1,4 +1,4 @@
-# app_final_consistent.py - Simplified working version
+# app_final_consistent.py - Simple working version
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -20,12 +20,12 @@ def load_data():
     data = pd.read_csv("rwanda_climate_maize_clean.csv")
     return data
 
-# Train model on historical data only (no future years in training)
+# Train model on historical data only
 @st.cache_resource
 def train_base_model():
     data = load_data()
     
-    # Split at 2015 (85% of 66 years = 56 years)
+    # Split at 2015 (56 years training, 10 years testing)
     train_data = data[data['year'] <= 2015].copy()
     test_data = data[data['year'] >= 2016].copy()
     
@@ -47,32 +47,41 @@ def train_base_model():
     svr = SVR(kernel="rbf", C=200, epsilon=0.1, gamma="scale")
     svr.fit(X_train_scaled, residuals_smoothed)
     
-    # Get predictions for historical test years (2016-2025)
+    # Get predictions for test years (2016-2025)
     X_test_scaled = scaler.transform(test_data[["temperature_C", "rainfall"]])
     constant_test = np.ones((X_test_scaled.shape[0], 1))
     X_test = np.hstack([constant_test, X_test_scaled])
+    
     arimax_pred = fit.forecast(steps=len(test_data), exog=X_test)
     svr_pred = svr.predict(X_test_scaled)
     hybrid_pred = arimax_pred + svr_pred
     
-    # Store test predictions by year (FIXED: use .iloc for pandas Series, direct index for numpy)
+    # Convert to lists for easier handling
+    test_years = test_data['year'].values.tolist()
+    arimax_list = arimax_pred.tolist() if hasattr(arimax_pred, 'tolist') else list(arimax_pred)
+    svr_list = svr_pred.tolist() if hasattr(svr_pred, 'tolist') else list(svr_pred)
+    hybrid_list = hybrid_pred.tolist() if hasattr(hybrid_pred, 'tolist') else list(hybrid_pred)
+    temp_list = test_data['temperature_C'].values.tolist()
+    rain_list = test_data['rainfall'].values.tolist()
+    
+    # Store predictions in dictionary
     test_predictions = {}
-    for i, year in enumerate(test_data['year'].values):
-        test_predictions[year] = {
-            'arimax': float(arimax_pred.iloc[i]),  # pandas Series uses .iloc
-            'svr': float(svr_pred[i]),             # numpy array uses [i]
-            'hybrid': float(hybrid_pred[i]),       # numpy array uses [i]
-            'temp': float(test_data.iloc[i]['temperature_C']),
-            'rain': float(test_data.iloc[i]['rainfall'])
+    for i in range(len(test_years)):
+        test_predictions[test_years[i]] = {
+            'arimax': arimax_list[i],
+            'svr': svr_list[i],
+            'hybrid': hybrid_list[i],
+            'temp': temp_list[i],
+            'rain': rain_list[i]
         }
     
-    return fit, svr, scaler, train_data, test_predictions
+    return fit, svr, scaler, test_predictions
 
 # Load base data
 data = load_data()
 
 # Train base model once
-fit, svr, scaler, train_data, test_predictions = train_base_model()
+fit, svr, scaler, test_predictions = train_base_model()
 
 # UI - Historical vs Future
 st.subheader("Select Prediction Mode")
@@ -132,7 +141,11 @@ else:
             X_input = np.hstack([constant_input, scaled_input])
             
             # Get ARIMAX prediction
-            arimax_future = fit.forecast(steps=1, exog=X_input)[0]
+            arimax_future = fit.forecast(steps=1, exog=X_input)
+            if hasattr(arimax_future, 'iloc'):
+                arimax_future = arimax_future.iloc[0]
+            else:
+                arimax_future = arimax_future[0]
             
             # Get SVR prediction
             svr_future = svr.predict(scaled_input)[0]
