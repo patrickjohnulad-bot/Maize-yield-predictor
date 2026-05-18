@@ -15,9 +15,9 @@ st.title("🌽 Maize Yield Predictor for Rwanda")
 st.markdown("**HYBRID MODEL: ARIMAX(1,2,1) + SVR**")
 st.markdown("---")
 
-@st.cache_resource
-def train_model():
-    # Load cleaned data
+@st.cache_data
+def load_data():
+    """Load the cleaned dataset"""
     data = pd.read_csv("rwanda_climate_maize_clean.csv")
     return data
 
@@ -31,16 +31,18 @@ def train_and_predict(future_years_data):
     # Append future years
     data_extended = pd.concat([data, future_years_data], ignore_index=True)
     
-    # Split
+    # Split using original data length
     split = int(len(data) * 0.85)
     train = data_extended.iloc[:split]
     test = data_extended.iloc[split:]
     
-    y_train = train["maize_yield"].dropna()
+    # IMPORTANT: Drop NaN from y_train AND align X_train
+    train_clean = train.dropna(subset=['maize_yield'])
+    y_train = train_clean["maize_yield"]
     
-    # Scale features
+    # Scale features using ONLY the clean training rows
     scaler = RobustScaler()
-    X_train_scaled = scaler.fit_transform(train[["temperature_C", "rainfall"]])
+    X_train_scaled = scaler.fit_transform(train_clean[["temperature_C", "rainfall"]])
     constant_col = np.ones((X_train_scaled.shape[0], 1))
     X_train = np.hstack([constant_col, X_train_scaled])
     
@@ -48,7 +50,7 @@ def train_and_predict(future_years_data):
     model = ARIMA(y_train, exog=X_train, order=(1, 2, 1))
     fit = model.fit()
     
-    # Train SVR
+    # Train SVR on residuals
     residuals = y_train - fit.fittedvalues
     residuals_smoothed = residuals.rolling(3, min_periods=1).mean().bfill()
     svr = SVR(kernel="rbf", C=200, epsilon=0.1, gamma="scale")
@@ -73,7 +75,7 @@ def train_and_predict(future_years_data):
     return fit, svr, scaler, predictions, test
 
 # Load base data
-data = pd.read_csv("rwanda_climate_maize_clean.csv")
+data = load_data()
 
 # UI - Historical vs Future
 st.subheader("Select Prediction Mode")
@@ -106,7 +108,7 @@ if mode == "Historical Year (1961-2025)":
         with col2:
             st.metric("☔ Rainfall", f"{rain:.1f} mm")
         with col3:
-            st.metric(" Actual Yield", f"{actual:.1f} kg/ha")
+            st.metric("📊 Actual Yield", f"{actual:.1f} kg/ha")
         
         if st.button("Predict", type="primary"):
             st.markdown("---")
@@ -116,9 +118,9 @@ if mode == "Historical Year (1961-2025)":
             with c1:
                 st.metric("🌽 HYBRID", f"{hybrid:.0f} kg/ha")
             with c2:
-                st.metric(" ARIMAX", f"{pred['arimax']:.0f} kg/ha")
+                st.metric("📈 ARIMAX", f"{pred['arimax']:.0f} kg/ha")
             with c3:
-                st.metric(" SVR", f"{svr_pred:+.0f} kg/ha")
+                st.metric("⚙️ SVR", f"{svr_pred:+.0f} kg/ha")
             
             error = hybrid - actual
             error_pct = (error / actual) * 100
@@ -164,15 +166,15 @@ else:
         with c1:
             st.metric("🌽 HYBRID", f"{hybrid:.0f} kg/ha")
         with c2:
-            st.metric(" ARIMAX", f"{pred['arimax']:.0f} kg/ha")
+            st.metric("📈 ARIMAX", f"{pred['arimax']:.0f} kg/ha")
         with c3:
-            st.metric(" SVR", f"{svr_pred:+.0f} kg/ha")
+            st.metric("⚙️ SVR", f"{svr_pred:+.0f} kg/ha")
         
-        # Compare with 2025
+        # Compare with historical average
         hist_mean = data['maize_yield'].mean()
         if hybrid > hist_mean:
-            st.success(f"Above historical average ({hist_mean:.0f} kg/ha)")
+            st.success(f"✅ Above historical average ({hist_mean:.0f} kg/ha)")
         else:
-            st.info(f"Below historical average ({hist_mean:.0f} kg/ha)")
+            st.info(f"📉 Below historical average ({hist_mean:.0f} kg/ha)")
 
-st.caption("**Thesis:** Hybrid ARIMAX(1,2,1) + SVR | Trained 1982-2015 | Tested 2016-2025")
+st.caption("**Thesis:** Hybrid ARIMAX(1,2,1) + SVR | Trained 1960-2015 | Tested 2016-2025")
