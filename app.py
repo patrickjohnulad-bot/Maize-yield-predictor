@@ -1,9 +1,10 @@
-# app_final_consistent.py - Simple working version
+# app_final_consistent.py - Fixed for Streamlit Cloud (matches bash results)
 import streamlit as st
 import pandas as pd
 import numpy as np
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.preprocessing import RobustScaler
+import statsmodels.api as sm
 from sklearn.svm import SVR
 import warnings
 warnings.filterwarnings('ignore')
@@ -14,26 +15,35 @@ st.title("🌽 Maize Yield Predictor for Rwanda")
 st.markdown("**HYBRID MODEL: ARIMAX(1,2,1) + SVR**")
 st.markdown("---")
 
-# Load data once
 @st.cache_data
 def load_data():
+    """Load cleaned data"""
     data = pd.read_csv("rwanda_climate_maize_clean.csv")
     return data
 
-# Train model on historical data only
 @st.cache_resource
-def train_base_model():
+def train_and_predict(future_years_data):
+    """Train model and predict including future years"""
+    
+    # Load base data
     data = load_data()
     
-    # Split at 2015 (56 years training, 10 years testing)
-    train_data = data[data['year'] <= 2015].copy()
-    test_data = data[data['year'] >= 2016].copy()
+    # Append future years
+    data_extended = pd.concat([data, future_years_data], ignore_index=True)
     
-    y_train = train_data["maize_yield"]
+    # Split using original data length (85% of original = 56 years = 1982-2015)
+    split = int(len(data) * 0.85)
     
-    # Scale features
+    train = data_extended.iloc[:split]
+    test = data_extended.iloc[split:]
+    
+    # IMPORTANT: Remove rows with NaN in maize_yield from training
+    train_clean = train.dropna(subset=['maize_yield'])
+    y_train = train_clean["maize_yield"]
+    
+    # Scale features using ONLY clean training rows
     scaler = RobustScaler()
-    X_train_scaled = scaler.fit_transform(train_data[["temperature_C", "rainfall"]])
+    X_train_scaled = scaler.fit_transform(train_clean[["temperature_C", "rainfall"]])
     constant_col = np.ones((X_train_scaled.shape[0], 1))
     X_train = np.hstack([constant_col, X_train_scaled])
     
@@ -47,79 +57,74 @@ def train_base_model():
     svr = SVR(kernel="rbf", C=200, epsilon=0.1, gamma="scale")
     svr.fit(X_train_scaled, residuals_smoothed)
     
-    # Get predictions for test years (2016-2025)
-    X_test_scaled = scaler.transform(test_data[["temperature_C", "rainfall"]])
+    # Predict all test years
+    X_test_scaled = scaler.transform(test[["temperature_C", "rainfall"]])
     constant_test = np.ones((X_test_scaled.shape[0], 1))
     X_test = np.hstack([constant_test, X_test_scaled])
+    arimax_test_pred = fit.forecast(steps=len(test), exog=X_test)
     
-    arimax_pred = fit.forecast(steps=len(test_data), exog=X_test)
-    svr_pred = svr.predict(X_test_scaled)
-    hybrid_pred = arimax_pred + svr_pred
-    
-    # Convert to lists for easier handling
-    test_years = test_data['year'].values.tolist()
-    arimax_list = arimax_pred.tolist() if hasattr(arimax_pred, 'tolist') else list(arimax_pred)
-    svr_list = svr_pred.tolist() if hasattr(svr_pred, 'tolist') else list(svr_pred)
-    hybrid_list = hybrid_pred.tolist() if hasattr(hybrid_pred, 'tolist') else list(hybrid_pred)
-    temp_list = test_data['temperature_C'].values.tolist()
-    rain_list = test_data['rainfall'].values.tolist()
-    
-    # Store predictions in dictionary
-    test_predictions = {}
-    for i in range(len(test_years)):
-        test_predictions[test_years[i]] = {
-            'arimax': arimax_list[i],
-            'svr': svr_list[i],
-            'hybrid': hybrid_list[i],
-            'temp': temp_list[i],
-            'rain': rain_list[i]
+    # Store predictions
+    predictions = {}
+    for i in range(len(test)):
+        year = int(test.iloc[i]['year'])
+        predictions[year] = {
+            'arimax': float(arimax_test_pred.iloc[i]),
+            'temp': float(test.iloc[i]['temperature_C']),
+            'rain': float(test.iloc[i]['rainfall'])
         }
     
-    return fit, svr, scaler, test_predictions
+    return fit, svr, scaler, predictions, test
 
 # Load base data
 data = load_data()
 
-# Train base model once
-fit, svr, scaler, test_predictions = train_base_model()
-
 # UI - Historical vs Future
 st.subheader("Select Prediction Mode")
 
-mode = st.radio("Choose mode:", ["Historical Year (2016-2025)", "Future Year (2026+)"], horizontal=True)
+mode = st.radio("Choose mode:", ["Historical Year (1961-2025)", "Future Year (2026+)"], horizontal=True)
 
-if mode == "Historical Year (2016-2025)":
-    st.subheader("Select Year")
+if mode == "Historical Year (1961-2025)":
+    # For historical, use pre-computed test set
+    future_data = pd.DataFrame(columns=['year', 'temperature_C', 'rainfall', 'maize_yield'])
+    fit, svr, scaler, predictions, test = train_and_predict(future_data)
     
-    years = sorted(test_predictions.keys())
-    selected_year = st.selectbox("Year", years, index=len(years)-1)
+    years = sorted(data['year'].unique())
+    selected_year = st.selectbox("Select Year", years, index=len(years)-1)
     
-    pred = test_predictions[selected_year]
-    actual = data[data['year'] == selected_year]['maize_yield'].values[0]
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("🌡️ Temperature", f"{pred['temp']:.2f}°C")
-    with col2:
-        st.metric("☔ Rainfall", f"{pred['rain']:.1f} mm")
-    with col3:
-        st.metric("📊 Actual Yield", f"{actual:.1f} kg/ha")
-    
-    if st.button("Predict", type="primary"):
-        st.markdown("---")
-        st.subheader("Prediction Results")
+    if selected_year in predictions:
+        pred = predictions[selected_year]
+        temp = pred['temp']
+        rain = pred['rain']
         
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("🌽 HYBRID", f"{pred['hybrid']:.0f} kg/ha")
-        with c2:
-            st.metric("📈 ARIMAX", f"{pred['arimax']:.0f} kg/ha")
-        with c3:
-            st.metric("⚙️ SVR", f"{pred['svr']:+.0f} kg/ha")
+        scaled = scaler.transform(np.array([[temp, rain]]))
+        svr_pred = svr.predict(scaled)[0]
+        hybrid = pred['arimax'] + svr_pred
         
-        error = pred['hybrid'] - actual
-        error_pct = (error / actual) * 100
-        st.metric("Difference", f"{error:+.0f} kg/ha", delta=f"{error_pct:+.1f}%", delta_color="inverse")
+        actual = data[data['year'] == selected_year]['maize_yield'].values[0]
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("🌡️ Temperature", f"{temp:.2f}°C")
+        with col2:
+            st.metric("☔ Rainfall", f"{rain:.1f} mm")
+        with col3:
+            st.metric("📊 Actual Yield", f"{actual:.1f} kg/ha")
+        
+        if st.button("Predict", type="primary"):
+            st.markdown("---")
+            st.subheader("Prediction Results")
+            
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("🌽 HYBRID", f"{hybrid:.0f} kg/ha")
+            with c2:
+                st.metric("📈 ARIMAX", f"{pred['arimax']:.0f} kg/ha")
+            with c3:
+                st.metric("⚙️ SVR", f"{svr_pred:+.0f} kg/ha")
+            
+            error = hybrid - actual
+            error_pct = (error / actual) * 100
+            st.metric("Difference", f"{error:+.0f} kg/ha", delta=f"{error_pct:+.1f}%", delta_color="inverse")
 
 else:
     # Future years
@@ -134,41 +139,38 @@ else:
         rain_input = st.number_input("☔ Expected Rainfall (mm)", min_value=800.0, max_value=1600.0, value=1280.0, step=10.0, format="%.1f")
     
     if st.button("Predict Future Year", type="primary"):
+        # Create future year data and retrain
+        future_data = pd.DataFrame([{
+            'year': future_year,
+            'temperature_C': temp_input,
+            'rainfall': rain_input,
+            'maize_yield': np.nan
+        }])
+        
         with st.spinner("Calculating prediction..."):
-            # Scale the input
-            scaled_input = scaler.transform(np.array([[temp_input, rain_input]]))
-            constant_input = np.ones((1, 1))
-            X_input = np.hstack([constant_input, scaled_input])
-            
-            # Get ARIMAX prediction
-            arimax_future = fit.forecast(steps=1, exog=X_input)
-            if hasattr(arimax_future, 'iloc'):
-                arimax_future = arimax_future.iloc[0]
-            else:
-                arimax_future = arimax_future[0]
-            
-            # Get SVR prediction
-            svr_future = svr.predict(scaled_input)[0]
-            
-            # Hybrid prediction
-            hybrid_future = arimax_future + svr_future
+            fit, svr, scaler, predictions, test = train_and_predict(future_data)
+        
+        pred = predictions[future_year]
+        scaled = scaler.transform(np.array([[temp_input, rain_input]]))
+        svr_pred = svr.predict(scaled)[0]
+        hybrid = pred['arimax'] + svr_pred
         
         st.markdown("---")
         st.subheader(f"Prediction for {int(future_year)}")
         
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("🌽 HYBRID", f"{hybrid_future:.0f} kg/ha")
+            st.metric("🌽 HYBRID", f"{hybrid:.0f} kg/ha")
         with c2:
-            st.metric("📈 ARIMAX", f"{arimax_future:.0f} kg/ha")
+            st.metric("📈 ARIMAX", f"{pred['arimax']:.0f} kg/ha")
         with c3:
-            st.metric("⚙️ SVR", f"{svr_future:+.0f} kg/ha")
+            st.metric("⚙️ SVR", f"{svr_pred:+.0f} kg/ha")
         
         # Compare with historical average
         hist_mean = data['maize_yield'].mean()
-        if hybrid_future > hist_mean:
+        if hybrid > hist_mean:
             st.success(f"✅ Above historical average ({hist_mean:.0f} kg/ha)")
         else:
             st.info(f"📉 Below historical average ({hist_mean:.0f} kg/ha)")
 
-st.caption("**Thesis:** Hybrid ARIMAX(1,2,1) + SVR | Trained 1960-2015 | Tested 2016-2025")
+st.caption("**Thesis:** Hybrid ARIMAX(1,2,1) + SVR | Trained 1982-2015 | Tested 2016-2025")
