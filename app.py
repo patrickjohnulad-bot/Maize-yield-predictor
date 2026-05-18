@@ -55,15 +55,15 @@ def train_base_model():
     svr_pred = svr.predict(X_test_scaled)
     hybrid_pred = arimax_pred + svr_pred
     
-    # Store test predictions by year
+    # Store test predictions by year (FIXED: use .iloc for pandas Series, direct index for numpy)
     test_predictions = {}
     for i, year in enumerate(test_data['year'].values):
         test_predictions[year] = {
-            'arimax': arimax_pred.iloc[i],
-            'svr': svr_pred[i],
-            'hybrid': hybrid_pred[i],
-            'temp': test_data.iloc[i]['temperature_C'],
-            'rain': test_data.iloc[i]['rainfall']
+            'arimax': float(arimax_pred.iloc[i]),  # pandas Series uses .iloc
+            'svr': float(svr_pred[i]),             # numpy array uses [i]
+            'hybrid': float(hybrid_pred[i]),       # numpy array uses [i]
+            'temp': float(test_data.iloc[i]['temperature_C']),
+            'rain': float(test_data.iloc[i]['rainfall'])
         }
     
     return fit, svr, scaler, train_data, test_predictions
@@ -116,9 +116,7 @@ else:
     # Future years
     st.subheader("Predict Future Year")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        future_year = st.number_input("Year", min_value=2026, max_value=2050, value=2026, step=1)
+    future_year = st.number_input("Year", min_value=2026, max_value=2050, value=2026, step=1)
     
     col1, col2 = st.columns(2)
     with col1:
