@@ -1,9 +1,9 @@
-# app.py - Fixed pmdarima to match your bash model
+# app.py - Using sklearn LinearRegression instead of statsmodels
 import streamlit as st
 import pandas as pd
 import numpy as np
-from pmdarima import ARIMA
 from sklearn.preprocessing import RobustScaler
+from sklearn.linear_model import LinearRegression
 from sklearn.svm import SVR
 import warnings
 warnings.filterwarnings('ignore')
@@ -23,51 +23,79 @@ def load_data():
 def train_base_model():
     data = load_data()
     
-    # Train: 1982-2015 (34 years) - matching your bash version
+    # Train: 1982-2015 (34 years)
     train_data = data[(data['year'] >= 1982) & (data['year'] <= 2015)].copy()
     test_data = data[data['year'] >= 2016].copy()
     
     y_train = train_data["maize_yield"].values
     
-    # Scale features
-    scaler = RobustScaler()
-    X_train_scaled = scaler.fit_transform(train_data[["temperature_C", "rainfall"]])
+    # Create lag features for AR terms
+    y_lag1 = np.roll(y_train, 1)
+    y_lag1[0] = y_train[0]
+    y_lag2 = np.roll(y_train, 2)
+    y_lag2[0:2] = y_train[0:2]
     
-    # Train ARIMAX with order (1,2,1) and differencing
-    # pmdarima uses d for differencing
-    model = ARIMA(order=(1, 2, 1), seasonal=False, with_intercept=True, method='lbfgs')
-    fit = model.fit(y_train, X_train_scaled)
+    # Scale climate features
+    scaler = RobustScaler()
+    X_climate_scaled = scaler.fit_transform(train_data[["temperature_C", "rainfall"]])
+    
+    # Create ARIMAX features (lags + climate)
+    X_train = np.column_stack([y_lag1, y_lag2, X_climate_scaled])
+    
+    # Train Linear Model (AR part)
+    linear_model = LinearRegression()
+    linear_model.fit(X_train, y_train)
+    
+    # Get predictions and residuals
+    arimax_pred_train = linear_model.predict(X_train)
+    residuals = y_train - arimax_pred_train
     
     # Train SVR on residuals
-    fitted_values = fit.predict_in_sample(X_train_scaled)
-    residuals = y_train - fitted_values
     residuals_smoothed = pd.Series(residuals).rolling(3, min_periods=1).mean().bfill().values
     svr = SVR(kernel="rbf", C=200, epsilon=0.1, gamma="scale")
-    svr.fit(X_train_scaled, residuals_smoothed)
+    svr.fit(X_train, residuals_smoothed)
     
-    # Get predictions for test years
-    X_test_scaled = scaler.transform(test_data[["temperature_C", "rainfall"]])
-    arimax_pred = fit.predict(n_periods=len(test_data), X=X_test_scaled)
-    svr_pred = svr.predict(X_test_scaled)
-    hybrid_pred = arimax_pred + svr_pred
+    # Predict test years
+    test_years = test_data['year'].values
+    X_test_climate = scaler.transform(test_data[["temperature_C", "rainfall"]])
     
+    # Build test features
     test_predictions = {}
-    for i in range(len(test_data)):
-        year = int(test_data.iloc[i]['year'])
+    last_y1 = y_train[-1]
+    last_y2 = y_train[-2]
+    
+    for i, year in enumerate(test_years):
+        # Create lag features for test
+        if i == 0:
+            y_lag1_test = last_y1
+            y_lag2_test = last_y2
+        else:
+            y_lag1_test = hybrid_pred_prev
+            y_lag2_test = last_y1
+        
+        X_test_row = np.column_stack([[y_lag1_test, y_lag2_test, X_test_climate[i]]])
+        
+        arimax_pred = linear_model.predict(X_test_row)[0]
+        svr_pred = svr.predict(X_test_row)[0]
+        hybrid_pred = arimax_pred + svr_pred
+        
         test_predictions[year] = {
-            'arimax': float(arimax_pred[i]),
-            'svr': float(svr_pred[i]),
-            'hybrid': float(hybrid_pred[i]),
+            'arimax': float(arimax_pred),
+            'svr': float(svr_pred),
+            'hybrid': float(hybrid_pred),
             'temp': float(test_data.iloc[i]['temperature_C']),
             'rain': float(test_data.iloc[i]['rainfall'])
         }
+        
+        hybrid_pred_prev = hybrid_pred
+        last_y1 = hybrid_pred
+        last_y2 = y_lag1_test
     
-    return fit, svr, scaler, test_predictions, train_data
+    return linear_model, svr, scaler, test_predictions, train_data
 
 data = load_data()
-fit, svr, scaler, test_predictions, train_data = train_base_model()
+linear_model, svr, scaler, test_predictions, train_data = train_base_model()
 
-# Get historical average for comparison
 hist_mean = train_data['maize_yield'].mean()
 
 st.subheader("Select Prediction Mode")
@@ -118,9 +146,26 @@ else:
     
     if st.button("Predict Future Year", type="primary"):
         with st.spinner("Calculating prediction..."):
-            scaled_input = scaler.transform(np.array([[temp_input, rain_input]]))
-            arimax_future = fit.predict(n_periods=1, X=scaled_input)[0]
-            svr_future = svr.predict(scaled_input)[0]
+            # Use last two predictions from test set
+            last_year = max(test_predictions.keys())
+            last_pred = test_predictions[last_year]
+            prev_year = last_year - 1
+            
+            if prev_year in test_predictions:
+                prev_pred = test_predictions[prev_year]
+                y_lag1 = last_pred['hybrid']
+                y_lag2 = prev_pred['hybrid']
+            else:
+                y_lag1 = last_pred['hybrid']
+                y_lag2 = y_lag1 - 50
+            
+            X_climate = np.array([[temp_input, rain_input]])
+            X_climate_scaled = scaler.transform(X_climate)
+            
+            X_future = np.column_stack([[y_lag1, y_lag2, X_climate_scaled[0]]])
+            
+            arimax_future = linear_model.predict(X_future)[0]
+            svr_future = svr.predict(X_future)[0]
             hybrid_future = arimax_future + svr_future
         
         st.markdown("---")
