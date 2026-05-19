@@ -1,4 +1,4 @@
-# app.py - Using sklearn LinearRegression instead of statsmodels
+# app.py - Fixed shape error
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -63,6 +63,7 @@ def train_base_model():
     test_predictions = {}
     last_y1 = y_train[-1]
     last_y2 = y_train[-2]
+    hybrid_pred_prev = last_y1
     
     for i, year in enumerate(test_years):
         # Create lag features for test
@@ -73,7 +74,8 @@ def train_base_model():
             y_lag1_test = hybrid_pred_prev
             y_lag2_test = last_y1
         
-        X_test_row = np.column_stack([[y_lag1_test, y_lag2_test, X_test_climate[i]]])
+        # FIXED: Properly stack the features
+        X_test_row = np.array([[y_lag1_test, y_lag2_test, X_test_climate[i][0], X_test_climate[i][1]]])
         
         arimax_pred = linear_model.predict(X_test_row)[0]
         svr_pred = svr.predict(X_test_row)[0]
@@ -159,10 +161,12 @@ else:
                 y_lag1 = last_pred['hybrid']
                 y_lag2 = y_lag1 - 50
             
+            # Scale climate input
             X_climate = np.array([[temp_input, rain_input]])
             X_climate_scaled = scaler.transform(X_climate)
             
-            X_future = np.column_stack([[y_lag1, y_lag2, X_climate_scaled[0]]])
+            # Build future feature row
+            X_future = np.array([[y_lag1, y_lag2, X_climate_scaled[0][0], X_climate_scaled[0][1]]])
             
             arimax_future = linear_model.predict(X_future)[0]
             svr_future = svr.predict(X_future)[0]
