@@ -1,4 +1,4 @@
-# app.py - Exact match to your working bash version
+# app.py - Fixed indexing for Streamlit Cloud
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -48,13 +48,17 @@ def train_base_model():
     
     arimax_pred = fit.forecast(steps=len(test_data), exog=X_test)
     svr_pred = svr.predict(X_test_scaled)
+    
+    # FIX: Convert to numpy array before indexing
+    arimax_pred = np.array(arimax_pred)
+    svr_pred = np.array(svr_pred)
     hybrid_pred = arimax_pred + svr_pred
     
     test_predictions = {}
     for i in range(len(test_data)):
         year = int(test_data.iloc[i]['year'])
         test_predictions[year] = {
-            'arimax': float(arimax_pred.iloc[i]),
+            'arimax': float(arimax_pred[i]),
             'svr': float(svr_pred[i]),
             'hybrid': float(hybrid_pred[i]),
             'temp': float(test_data.iloc[i]['temperature_C']),
@@ -119,9 +123,13 @@ else:
             X_input = np.hstack([constant_input, scaled_input])
             
             arimax_future = fit.forecast(steps=1, exog=X_input)
-            arimax_future = arimax_future.iloc[0] if hasattr(arimax_future, 'iloc') else arimax_future[0]
+            # Convert to float
+            if hasattr(arimax_future, 'iloc'):
+                arimax_future = float(arimax_future.iloc[0])
+            else:
+                arimax_future = float(arimax_future[0])
             
-            svr_future = svr.predict(scaled_input)[0]
+            svr_future = float(svr.predict(scaled_input)[0])
             hybrid_future = arimax_future + svr_future
         
         st.markdown("---")
