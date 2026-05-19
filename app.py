@@ -1,4 +1,4 @@
-# app_final_consistent.py - Fixed for Streamlit Cloud Python 3.14
+why cant you fix this and it has to work like my bash version # app_final_consistent.py - Simple working version
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,100 +25,63 @@ def load_data():
 def train_base_model():
     data = load_data()
     
-    # Split: 1982-2015 for training (34 years) to match your bash version
-    train_data = data[(data['year'] >= 1982) & (data['year'] <= 2015)].copy()
+    # Split at 2015 (56 years training, 10 years testing)
+    train_data = data[data['year'] <= 2015].copy()
     test_data = data[data['year'] >= 2016].copy()
     
-    y_train = train_data["maize_yield"].values
+    y_train = train_data["maize_yield"]
     
     # Scale features
     scaler = RobustScaler()
     X_train_scaled = scaler.fit_transform(train_data[["temperature_C", "rainfall"]])
+    constant_col = np.ones((X_train_scaled.shape[0], 1))
+    X_train = np.hstack([constant_col, X_train_scaled])
     
-    # MANUAL DIFFERENCING (d=2) to avoid statsmodels exog bug
-    # This creates a clean dataset for ARIMA
-    y_train_diff = np.diff(np.diff(y_train))
-    X_train_diff = np.diff(np.diff(X_train_scaled, axis=0), axis=0)
-    
-    # Train ARIMA on differenced data (NO exog parameter - avoids the bug)
-    model = ARIMA(y_train_diff, order=(1, 0, 1))
+    # Train ARIMAX
+    model = ARIMA(y_train, exog=X_train, order=(1, 2, 1))
     fit = model.fit()
     
-    # For SVR, use the original scaled features with residuals
-    # Get ARIMA fitted values and invert differencing
-    arima_fitted_diff = fit.fittedvalues
-    # Approximate original scale residuals
-    y_train_original_scale = y_train[2:]  # After 2 differencing
-    arima_fitted_original = y_train_diff[:len(arima_fitted_diff)]  # Simplified
-    
-    # Train SVR on residuals (using original scaled X)
-    residuals = y_train[2:] - arima_fitted_diff
-    residuals_smoothed = pd.Series(residuals).rolling(3, min_periods=1).mean().bfill().values
+    # Train SVR on residuals
+    residuals = y_train - fit.fittedvalues
+    residuals_smoothed = residuals.rolling(3, min_periods=1).mean().bfill()
     svr = SVR(kernel="rbf", C=200, epsilon=0.1, gamma="scale")
-    svr.fit(X_train_scaled[2:], residuals_smoothed)
+    svr.fit(X_train_scaled, residuals_smoothed)
     
     # Get predictions for test years (2016-2025)
     X_test_scaled = scaler.transform(test_data[["temperature_C", "rainfall"]])
+    constant_test = np.ones((X_test_scaled.shape[0], 1))
+    X_test = np.hstack([constant_test, X_test_scaled])
     
-    # For test predictions, we need to manually forecast
-    # Using last values to predict forward
-    last_y = y_train[-1]
-    last_y_diff1 = y_train[-1] - y_train[-2]
-    last_y_diff2 = last_y_diff1 - (y_train[-2] - y_train[-3])
+    arimax_pred = fit.forecast(steps=len(test_data), exog=X_test)
+    svr_pred = svr.predict(X_test_scaled)
+    hybrid_pred = arimax_pred + svr_pred
     
+    # Convert to lists for easier handling
+    test_years = test_data['year'].values.tolist()
+    arimax_list = arimax_pred.tolist() if hasattr(arimax_pred, 'tolist') else list(arimax_pred)
+    svr_list = svr_pred.tolist() if hasattr(svr_pred, 'tolist') else list(svr_pred)
+    hybrid_list = hybrid_pred.tolist() if hasattr(hybrid_pred, 'tolist') else list(hybrid_pred)
+    temp_list = test_data['temperature_C'].values.tolist()
+    rain_list = test_data['rainfall'].values.tolist()
+    
+    # Store predictions in dictionary
     test_predictions = {}
-    current_y = last_y
-    current_diff1 = last_y_diff1
-    current_diff2 = last_y_diff2
-    
-    for i in range(len(test_data)):
-        year = int(test_data.iloc[i]['year'])
-        
-        # Simple forecast using ARIMA model's forecast method
-        # But we need to reconstruct from differenced
-        if i == 0:
-            # Get ARIMA forecast on differenced scale
-            arima_forecast_diff = fit.forecast(steps=1)[0]
-            # Reconstruct original scale
-            current_diff1 = current_diff1 + arima_forecast_diff
-            current_y = current_y + current_diff1
-            arimax_val = current_y
-        else:
-            arima_forecast_diff = fit.forecast(steps=1)[0]
-            current_diff1 = current_diff1 + arima_forecast_diff
-            current_y = current_y + current_diff1
-            arimax_val = current_y
-        
-        # SVR prediction
-        svr_val = svr.predict(X_test_scaled[i:i+1])[0]
-        hybrid_val = arimax_val + svr_val
-        
-        test_predictions[year] = {
-            'arimax': float(arimax_val),
-            'svr': float(svr_val),
-            'hybrid': float(hybrid_val),
-            'temp': float(test_data.iloc[i]['temperature_C']),
-            'rain': float(test_data.iloc[i]['rainfall'])
+    for i in range(len(test_years)):
+        test_predictions[test_years[i]] = {
+            'arimax': arimax_list[i],
+            'svr': svr_list[i],
+            'hybrid': hybrid_list[i],
+            'temp': temp_list[i],
+            'rain': rain_list[i]
         }
     
-    # Store future prediction coefficients for later use
-    future_coefs = {
-        'last_y': last_y,
-        'last_diff1': last_y_diff1,
-        'last_diff2': last_y_diff2,
-        'fit': fit,
-        'svr': svr,
-        'scaler': scaler,
-        'X_train_scaled': X_train_scaled
-    }
-    
-    return test_predictions, future_coefs
+    return fit, svr, scaler, test_predictions
 
 # Load base data
 data = load_data()
 
 # Train base model once
-test_predictions, future_coefs = train_base_model()
+fit, svr, scaler, test_predictions = train_base_model()
 
 # UI - Historical vs Future
 st.subheader("Select Prediction Mode")
@@ -172,54 +135,40 @@ else:
     
     if st.button("Predict Future Year", type="primary"):
         with st.spinner("Calculating prediction..."):
-            try:
-                # Use the stored coefficients for forecasting
-                fit = future_coefs['fit']
-                svr = future_coefs['svr']
-                scaler = future_coefs['scaler']
-                
-                # Scale input
-                scaled_input = scaler.transform(np.array([[temp_input, rain_input]]))
-                
-                # Get ARIMA forecast for 1 step ahead
-                arima_forecast_diff = fit.forecast(steps=1)[0]
-                
-                # Reconstruct from differenced to original scale
-                last_y = future_coefs['last_y']
-                last_diff1 = future_coefs['last_diff1']
-                
-                new_diff1 = last_diff1 + arima_forecast_diff
-                new_y = last_y + new_diff1
-                arimax_val = new_y
-                
-                # Get SVR prediction
-                svr_val = svr.predict(scaled_input)[0]
-                
-                # Hybrid prediction
-                hybrid_val = arimax_val + svr_val
-                
-            except Exception as e:
-                # Fallback to bash values if calculation fails
-                arimax_val = 1743
-                svr_val = 45
-                hybrid_val = 1788
+            # Scale the input
+            scaled_input = scaler.transform(np.array([[temp_input, rain_input]]))
+            constant_input = np.ones((1, 1))
+            X_input = np.hstack([constant_input, scaled_input])
+            
+            # Get ARIMAX prediction
+            arimax_future = fit.forecast(steps=1, exog=X_input)
+            if hasattr(arimax_future, 'iloc'):
+                arimax_future = arimax_future.iloc[0]
+            else:
+                arimax_future = arimax_future[0]
+            
+            # Get SVR prediction
+            svr_future = svr.predict(scaled_input)[0]
+            
+            # Hybrid prediction
+            hybrid_future = arimax_future + svr_future
         
         st.markdown("---")
         st.subheader(f"Prediction for {int(future_year)}")
         
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("🌽 HYBRID", f"{hybrid_val:.0f} kg/ha")
+            st.metric("🌽 HYBRID", f"{hybrid_future:.0f} kg/ha")
         with c2:
-            st.metric("📈 ARIMAX", f"{arimax_val:.0f} kg/ha")
+            st.metric("📈 ARIMAX", f"{arimax_future:.0f} kg/ha")
         with c3:
-            st.metric("⚙️ SVR", f"{svr_val:+.0f} kg/ha")
+            st.metric("⚙️ SVR", f"{svr_future:+.0f} kg/ha")
         
         # Compare with historical average
         hist_mean = data['maize_yield'].mean()
-        if hybrid_val > hist_mean:
+        if hybrid_future > hist_mean:
             st.success(f"✅ Above historical average ({hist_mean:.0f} kg/ha)")
         else:
             st.info(f"📉 Below historical average ({hist_mean:.0f} kg/ha)")
 
-st.caption("**Thesis:** Hybrid ARIMAX(1,2,1) + SVR | Trained 1982-2015 | Tested 2016-2025")
+st.caption("**Thesis:** Hybrid ARIMAX(1,2,1) + SVR | Trained 1960-2015 | Tested 2016-2025")
