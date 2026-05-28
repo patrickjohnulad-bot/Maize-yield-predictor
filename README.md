@@ -3,7 +3,7 @@
 
 # 🌽 Maize Yield Predictor for Rwanda
 
-### Time Series Forecasting for Agricultural Yield Prediction
+### AI-Powered Climate Resilience and Crop Yield Prediction for African Agriculture
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![Machine Learning](https://img.shields.io/badge/ML-ARIMA%20%7C%20SVR-orange.svg)](https://scikit-learn.org)
